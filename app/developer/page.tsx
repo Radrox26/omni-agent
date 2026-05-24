@@ -87,7 +87,7 @@ export default function DeveloperDashboard() {
             <CardHeader className="border-b border-slate-800">
               <CardTitle className="text-slate-100 text-xl">Omni-Agent Terminal</CardTitle>
               <CardDescription className="text-slate-400">
-                Type "@Omni-Context-Agent I want to start working on user story AUTH-102" to test the AI.
+                Type "@Omni-Agent I want to start working on user story AUTH-102" to test the AI.
               </CardDescription>
             </CardHeader>
             
