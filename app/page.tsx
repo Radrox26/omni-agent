@@ -45,7 +45,12 @@ export default function Home() {
       </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6 w-full max-w-4xl relative z-10">
         {roles.map((role) => (
-          <Link href={role.title.includes("Developer") ? "/developer" : role.title.includes("Product Manager") || role.title.includes("Business Analyst") ? "/pm-ba" : "#"} key={role.title} className="block">
+          <Link href={
+              role.title.includes("Developer") ? "/developer" : 
+              role.title.includes("Product Manager") || role.title.includes("Business Analyst") ? "/pm-ba" : 
+              role.title.includes("HR") || role.title.includes("Operations") ? "/hr-ops" : 
+              "#"
+            } key={role.title} className="block">
             <Card 
               className={`group cursor-pointer border-slate-800 bg-slate-900/50 backdrop-blur-md hover:-translate-y-2 hover:border-slate-700 hover:shadow-2xl transition-all duration-300 ${role.glow} h-full`}
             >

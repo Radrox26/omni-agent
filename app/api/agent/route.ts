@@ -37,19 +37,19 @@ export async function POST(request: Request) {
     });
 
     const routerPrompt = `
-      You are the brain of the Omni-Context-Agent routing system.
-      Analyze the following user prompt and determine their intent.
-      
-      If the user wants to work on, start, or check an existing Jira ticket (e.g., "I want to work on SCRUM-1"), classify as "DEVELOPER".
-      If the user wants to plan, create, or build a new feature or idea, classify as "PM".
+      You are the brain of the Omni-Context-Agent routing system. Analyze the user prompt and determine intent.
+      - Work on/start an existing Jira ticket (e.g., "work on SCRUM-1") -> "DEV"
+      - Plan, create, or build a new feature idea -> "PM/BA"
+      - Onboard an employee, manage HR, or coordinate operations -> "HR/OPS"
       
       User Prompt: "${prompt}"
       
-      Return ONLY a JSON object with this exact structure:
+      Return ONLY a JSON object:
       {
-        "intent": "DEVELOPER" | "PM" | "UNKNOWN",
+        "intent": "DEV" | "PM/BA" | "HR/OPS" | "UNKNOWN",
         "extractedTicketId": "string or null",
-        "extractedFeatureIdea": "string or null"
+        "extractedFeatureIdea": "string or null",
+        "extractedHrTarget": "string or null"
       }
     `;
 
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
     // ---------------------------------------------------------------------------
     // PHASE 2: THE PM WORKFLOW (Write to Jira)
     // ---------------------------------------------------------------------------
-    if (routingData.intent === "PM" && routingData.extractedFeatureIdea) {
+    if (routingData.intent === "PM/BA" && routingData.extractedFeatureIdea) {
       
       // 1. Generate the Agile formatting
       const pmModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
@@ -110,9 +110,9 @@ export async function POST(request: Request) {
     }
 
     // ---------------------------------------------------------------------------
-    // PHASE 3: THE DEVELOPER WORKFLOW (Read from Jira & Push to GitHub)
+    // PHASE 3: THE DEV WORKFLOW (Read from Jira & Push to GitHub)
     // ---------------------------------------------------------------------------
-    if (routingData.intent === "DEVELOPER" && routingData.extractedTicketId) {
+    if (routingData.intent === "DEV" && routingData.extractedTicketId) {
       // Fetch Jira Data
       const ticketData = await fetchJira(`issue/${routingData.extractedTicketId}`);
       if (ticketData.errorMessages) throw new Error("Ticket not found in Jira.");
@@ -144,6 +144,29 @@ export async function POST(request: Request) {
       const devResult = await devModel.generateContent(`You are a developer assistant. The user wants to work on ${routingData.extractedTicketId} (${summary}, Status: ${status}). Tell them you routed this as a Developer task, successfully read the Jira ticket, and created the GitHub branch ${branchName}. Provide a quick 3-step coding plan.`);
       
       return NextResponse.json({ success: true, message: devResult.response.text() });
+    }
+
+    // ---------------------------------------------------------------------------
+    // PHASE 4: THE HR/OPS WORKFLOW (The Concierge)
+    // ---------------------------------------------------------------------------
+
+    if (routingData.intent === "HR/OPS" && routingData.extractedHrTarget) {
+      const hrModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const hrPrompt = `
+        Act as an Expert HR & Operations Concierge. The user has requested to: "${routingData.extractedHrTarget}".
+        Generate a comprehensive but concise 30-day onboarding checklist for this specific role. 
+        Then, generate the below 2 points and explicitly confirm that you have "simulated" the following backend actions:
+        1. Drafted an IT hardware request email.
+        2. Scheduled a welcome message in the #general Slack channel.
+        Format this cleanly with bullet points and bold text.
+      `;
+      
+      const hrResult = await hrModel.generateContent(hrPrompt);
+      
+      return NextResponse.json({ 
+        success: true, 
+        message: `[ROUTED AS: HR & OPERATIONS]\n\n${hrResult.response.text()}` 
+      });
     }
 
     // Fallback if the AI couldn't classify it properly
