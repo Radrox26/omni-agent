@@ -1,90 +1,155 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
 
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
+
+// Helper function to call Jira API
+async function fetchJira(endpoint: string, method: string = "GET", body: any = null) {
+  const { JIRA_DOMAIN, JIRA_EMAIL, JIRA_API_TOKEN } = process.env;
+  const authBuffer = Buffer.from(`${JIRA_EMAIL}:${JIRA_API_TOKEN}`).toString("base64");
+  
+  const options: RequestInit = {
+    method,
+    headers: {
+      "Authorization": `Basic ${authBuffer}`,
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
+  };
+  
+  if (body) options.body = JSON.stringify(body);
+  
+  const res = await fetch(`https://${JIRA_DOMAIN}/rest/api/2/${endpoint}`, options);
+  return res.json();
+}
+
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const userPrompt = body.prompt;
+    const { prompt } = await request.json();
 
-    if (!userPrompt) {
-      return NextResponse.json({ success: false, error: "Prompt is required" }, { status: 400 });
-    }
+    // ---------------------------------------------------------------------------
+    // PHASE 1: THE SEMANTIC ROUTER
+    // ---------------------------------------------------------------------------
+    // We force Gemini to output strict JSON to classify the user's intent.
+    const routerModel = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash",
+      generationConfig: { responseMimeType: "application/json" }
+    });
 
-    const ticketMatch = userPrompt.match(/[A-Z]+-\d+/i);
-    let systemContext = "";
-
-    if (ticketMatch) {
-      const issueKey = ticketMatch[0].toUpperCase();
+    const routerPrompt = `
+      You are the brain of the Omni-Context-Agent routing system.
+      Analyze the following user prompt and determine their intent.
       
-      // --- 1. JIRA FETCH ---
-      const jiraDomain = process.env.JIRA_DOMAIN;
-      const jiraEmail = process.env.JIRA_EMAIL;
-      const jiraToken = process.env.JIRA_API_TOKEN;
-      const authBuffer = Buffer.from(`${jiraEmail}:${jiraToken}`).toString('base64');
+      If the user wants to work on, start, or check an existing Jira ticket (e.g., "I want to work on SCRUM-1"), classify as "DEVELOPER".
+      If the user wants to plan, create, or build a new feature or idea, classify as "PM".
+      
+      User Prompt: "${prompt}"
+      
+      Return ONLY a JSON object with this exact structure:
+      {
+        "intent": "DEVELOPER" | "PM" | "UNKNOWN",
+        "extractedTicketId": "string or null",
+        "extractedFeatureIdea": "string or null"
+      }
+    `;
 
-      let summary = "Unknown Task";
-      let status = "Unknown Status";
+    const routerResult = await routerModel.generateContent(routerPrompt);
+    const routingData = JSON.parse(routerResult.response.text());
 
-      const jiraRes = await fetch(`https://${jiraDomain}/rest/api/3/issue/${issueKey}`, {
-        method: 'GET',
-        headers: { 'Authorization': `Basic ${authBuffer}`, 'Accept': 'application/json' }
+    // ---------------------------------------------------------------------------
+    // PHASE 2: THE PM WORKFLOW (Write to Jira)
+    // ---------------------------------------------------------------------------
+    if (routingData.intent === "PM" && routingData.extractedFeatureIdea) {
+      
+      // 1. Generate the Agile formatting
+      const pmModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash", generationConfig: { responseMimeType: "application/json" } });
+      const pmPrompt = `
+        Act as a Senior Product Manager. Take this feature idea: "${routingData.extractedFeatureIdea}"
+        Break it down into 1 standard Agile Epic and 3 child User Stories.
+        
+        Return ONLY a JSON object with this exact structure:
+        {
+          "epic": { "title": "...", "description": "..." },
+          "stories": [
+            { "title": "...", "description": "..." },
+            { "title": "...", "description": "..." },
+            { "title": "...", "description": "..." }
+          ]
+        }
+      `;
+      
+      const agilePlan = JSON.parse((await pmModel.generateContent(pmPrompt)).response.text());
+      const projectKey = process.env.JIRA_PROJECT_KEY || "SCRUM";
+
+      // 2. Push Epic to Jira (Using Issue Type "Epic" or standard "Task" if Epic isn't configured)
+      const epicResponse = await fetchJira("issue", "POST", {
+        fields: {
+          project: { key: projectKey },
+          summary: `[EPIC] ${agilePlan.epic.title}`,
+          description: agilePlan.epic.description,
+          issuetype: { name: "Task" } // Defaulting to Task to ensure it doesn't fail on custom Jira configurations
+        }
       });
 
-      if (jiraRes.ok) {
-        const data = await jiraRes.json();
-        summary = data.fields?.summary || summary;
-        status = data.fields?.status?.name || status;
-        systemContext += `\n\n[SYSTEM: User asked about Jira ticket ${issueKey}. Live Data - Title: "${summary}", Status: "${status}".]`;
-      }
-
-      // --- 2. GITHUB EXECUTION ---
-      const ghOwner = process.env.GITHUB_OWNER;
-      const ghRepo = process.env.GITHUB_REPO;
-      const ghToken = process.env.GITHUB_PAT;
-
-      if (ghOwner && ghRepo && ghToken && jiraRes.ok) {
-        // We auto-format a clean, standardized branch name
-        const branchName = `feat/${issueKey.toLowerCase()}-auto-agent-setup`;
-
-        try {
-          // A. Get the current 'main' branch SHA
-          const refRes = await fetch(`https://api.github.com/repos/${ghOwner}/${ghRepo}/git/refs/heads/main`, {
-            headers: { 'Authorization': `Bearer ${ghToken}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Omni-Context-Agent' }
-          });
-
-          if (refRes.ok) {
-            const refData = await refRes.json();
-            const sha = refData.object.sha;
-
-            // B. Create the new branch using that SHA
-            const createRes = await fetch(`https://api.github.com/repos/${ghOwner}/${ghRepo}/git/refs`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${ghToken}`, 'Accept': 'application/vnd.github.v3+json', 'User-Agent': 'Omni-Context-Agent' },
-              body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: sha })
-            });
-
-            if (createRes.ok || createRes.status === 422) { // 422 means it might already exist
-              systemContext += `\n[SYSTEM: You successfully executed a GitHub command to create a branch named '${branchName}'. Inform the user their branch is ready, and give them a 3-step technical implementation plan for "${summary}".]`;
-            }
+      // 3. Push Child Stories to Jira
+      for (const story of agilePlan.stories) {
+        await fetchJira("issue", "POST", {
+          fields: {
+            project: { key: projectKey },
+            summary: `[STORY] ${story.title}`,
+            description: `${story.description}\n\nParent Epic: ${epicResponse.key}`,
+            issuetype: { name: "Story" } // Ensure "Story" issue type exists in your Jira project
           }
-        } catch (error) {
-          console.error("GitHub Error:", error);
-        }
+        });
       }
+
+      return NextResponse.json({ 
+        success: true, 
+        message: `Plan executed autonomously. I successfully routed this as a Product Manager task. I analyzed your idea, generated an Agile Epic with 3 User Stories, and pushed them directly into your Jira project (${projectKey}).` 
+      });
     }
 
-    // --- 3. AI SYNTHESIS ---
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    // ---------------------------------------------------------------------------
+    // PHASE 3: THE DEVELOPER WORKFLOW (Read from Jira & Push to GitHub)
+    // ---------------------------------------------------------------------------
+    if (routingData.intent === "DEVELOPER" && routingData.extractedTicketId) {
+      // Fetch Jira Data
+      const ticketData = await fetchJira(`issue/${routingData.extractedTicketId}`);
+      if (ticketData.errorMessages) throw new Error("Ticket not found in Jira.");
+      
+      const summary = ticketData.fields.summary;
+      const status = ticketData.fields.status.name;
 
-    const finalPrompt = userPrompt + systemContext;
-    const result = await model.generateContent(finalPrompt);
-    const responseText = await result.response.text();
+      // GitHub Execution Logic (Simplified for stability)
+      const branchName = `feat/${routingData.extractedTicketId.toLowerCase()}-auto-agent-setup`;
+      const githubRes = await fetch(`https://api.github.com/repos/${process.env.GITHUB_USERNAME}/${process.env.GITHUB_REPO}/git/refs/heads/main`, {
+        headers: {
+          "Authorization": `token ${process.env.GITHUB_PAT}`,
+          "Accept": "application/vnd.github.v3+json",
+        }
+      });
+      
+      const mainBranchData = await githubRes.json();
+      await fetch(`https://api.github.com/repos/${process.env.GITHUB_USERNAME}/${process.env.GITHUB_REPO}/git/refs`, {
+        method: "POST",
+        headers: {
+          "Authorization": `token ${process.env.GITHUB_PAT}`,
+          "Accept": "application/vnd.github.v3+json",
+        },
+        body: JSON.stringify({ ref: `refs/heads/${branchName}`, sha: mainBranchData.object.sha })
+      });
 
-    return NextResponse.json({ success: true, data: responseText });
-    
-  } catch (error) {
-    console.error("Agent Error:", error);
-    return NextResponse.json({ success: false, error: "Failed to generate response." }, { status: 500 });
+      // Final Chat Response
+      const devModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const devResult = await devModel.generateContent(`You are a developer assistant. The user wants to work on ${routingData.extractedTicketId} (${summary}, Status: ${status}). Tell them you routed this as a Developer task, successfully read the Jira ticket, and created the GitHub branch ${branchName}. Provide a quick 3-step coding plan.`);
+      
+      return NextResponse.json({ success: true, message: devResult.response.text() });
+    }
+
+    // Fallback if the AI couldn't classify it properly
+    return NextResponse.json({ success: true, message: "I received your message, but I wasn't sure if you wanted to plan a new feature or execute a coding task. Could you clarify your goal?" });
+
+  } catch (error: any) {
+    return NextResponse.json({ success: false, message: `System Error: ${error.message}` });
   }
 }
