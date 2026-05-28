@@ -49,6 +49,7 @@ export default function Home() {
               role.title.includes("Developer") ? "/developer" : 
               role.title.includes("Product Manager") || role.title.includes("Business Analyst") ? "/pm-ba" : 
               role.title.includes("HR") || role.title.includes("Operations") ? "/hr-ops" : 
+              role.title.includes("Architect") || role.title.includes("Tech Lead") ? "/architect-lead" :
               "#"
             } key={role.title} className="block">
             <Card 

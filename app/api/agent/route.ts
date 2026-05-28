@@ -41,15 +41,18 @@ export async function POST(request: Request) {
       - Work on/start an existing Jira ticket (e.g., "work on SCRUM-1") -> "DEV"
       - Plan, create, or build a new feature idea -> "PM/BA"
       - Onboard an employee, manage HR, or coordinate operations -> "HR/OPS"
+      - Review pull requests, code, or architecture -> "ARCHITECT/LEAD"
+      - If you can't determine a clear intent, classify as "UNKNOWN" and ask for clarification.
       
       User Prompt: "${prompt}"
       
       Return ONLY a JSON object:
       {
-        "intent": "DEV" | "PM/BA" | "HR/OPS" | "UNKNOWN",
+        "intent": "DEV" | "PM/BA" | "HR/OPS" | "ARCHITECT/LEAD" | "UNKNOWN",
         "extractedTicketId": "string or null",
         "extractedFeatureIdea": "string or null",
-        "extractedHrTarget": "string or null"
+        "extractedHrTarget": "string or null",
+        "extractedPrNumber": "string or null"
       }
     `;
 
@@ -166,6 +169,27 @@ export async function POST(request: Request) {
       return NextResponse.json({ 
         success: true, 
         message: `[ROUTED AS: HR & OPERATIONS]\n\n${hrResult.response.text()}` 
+      });
+    }
+
+    // ---------------------------------------------------------------------------
+    // PHASE 5: THE ARCHITECT WORKFLOW (Semantic Code Review)
+    // ---------------------------------------------------------------------------
+    if (routingData.intent === "ARCHITECT/LEAD" && routingData.extractedPrNumber) {
+      const archModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      const archPrompt = `
+        Act as a Principal Software Architect doing a semantic code review. The user has asked you to review a PR: "${prompt}".
+        Since this is a simulated hackathon demo, mock a response stating you reviewed the code against internal guidelines.
+        Note one specific imaginary violation (e.g., "The database query in auth_module.ts bypasses the Redis caching layer").
+        State that you have automatically posted an inline comment on GitHub.
+        Format cleanly with bullet points.
+      `;
+      
+      const archResult = await archModel.generateContent(archPrompt);
+      
+      return NextResponse.json({ 
+        success: true, 
+        message: `[ROUTED AS: ARCHITECT & TECH LEAD]\n\n${archResult.response.text()}` 
       });
     }
 
