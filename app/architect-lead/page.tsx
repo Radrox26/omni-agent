@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import ReactMarkdown from 'react-markdown';
 
 export default function ArchitectDashboard() {
   const [prompt, setPrompt] = useState("");
@@ -13,18 +14,25 @@ export default function ArchitectDashboard() {
   const handleExecute = async () => {
     if (!prompt) return;
     setLoading(true);
-    setResponse("Analyzing Pull Request against company architectural guidelines...");
+    setResponse("Consulting Omni-Context-Agent to parse intent and execute command...");
     
     try {
-      const res = await fetch("/api/agent", {
+      // 🧠 Passing raw text directly to our AI router. No frontend regex.
+      const res = await fetch("/api/review-pr", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({ rawPrompt: prompt }),
       });
+      
       const data = await res.json();
-      setResponse(data.message || "Error generating response.");
+      
+      if (data.success) {
+        setResponse(data.review || data.message);
+      } else {
+        setResponse(data.error || "Error generating automated report.");
+      }
     } catch (error) {
-      setResponse("Failed to connect to Omni-Context-Agent.");
+      setResponse("Failed to establish link with Omni-Context-Agent.");
     }
     setLoading(false);
   };
@@ -79,7 +87,7 @@ export default function ArchitectDashboard() {
               <span>🏗️</span> Omni-Agent Semantic Reviewer
             </CardTitle>
             <CardDescription className="text-slate-400">
-              Trigger a semantic code review. (e.g., "Review pending PR #12 for caching layer violations.")
+              Trigger a semantic code review or fetch PRs. Try: "Show me all open PRs" or "Review PR #1"
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -95,14 +103,22 @@ export default function ArchitectDashboard() {
                 disabled={loading}
                 className="bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 text-white font-bold h-12 px-8"
               >
-                {loading ? "Reviewing..." : "Review PR"}
+                {loading ? "Analyzing..." : "Review PR"}
               </Button>
             </div>
             
             {/* Terminal Output */}
-            <div className="bg-slate-950 rounded-lg p-4 font-mono text-sm min-h-[150px] border border-slate-800 whitespace-pre-wrap">
-              <span className="text-orange-500">{"> "}</span>
-              <span className="text-slate-300">{response || "Awaiting input..."}</span>
+            <div className="bg-slate-950 rounded-lg p-6 font-sans text-sm min-h-[250px] border border-slate-800 overflow-y-auto max-h-[500px]">
+              <div className="flex gap-3">
+                <span className="text-orange-500 font-mono mt-1">{">"}</span>
+                <div className="prose prose-invert prose-p:leading-relaxed prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800 max-w-none w-full text-slate-300">
+                  {response ? (
+                    <ReactMarkdown>{response}</ReactMarkdown>
+                  ) : (
+                    <span className="font-mono">Awaiting input...</span>
+                  )}
+                </div>
+              </div>
             </div>
           </CardContent>
         </Card>
