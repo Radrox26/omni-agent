@@ -1,5 +1,6 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextResponse } from "next/server";
+import { Pinecone } from '@pinecone-database/pinecone';
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
@@ -150,26 +151,57 @@ export async function POST(request: Request) {
     }
 
     // ---------------------------------------------------------------------------
-    // PHASE 4: THE HR/OPS WORKFLOW (The Concierge)
+    // PHASE 4: THE HR/OPS WORKFLOW (RAG via Pinecone)
     // ---------------------------------------------------------------------------
 
-    if (routingData.intent === "HR/OPS" && routingData.extractedHrTarget) {
-      const hrModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
-      const hrPrompt = `
-        Act as an Expert HR & Operations Concierge. The user has requested to: "${routingData.extractedHrTarget}".
-        Generate a comprehensive but concise 30-day onboarding checklist for this specific role. 
-        Then, generate the below 2 points and explicitly confirm that you have "simulated" the following backend actions:
-        1. Drafted an IT hardware request email.
-        2. Scheduled a welcome message in the #general Slack channel.
-        Format this cleanly with bullet points and bold text.
-      `;
-      
-      const hrResult = await hrModel.generateContent(hrPrompt);
-      
-      return NextResponse.json({ 
-        success: true, 
-        message: `[ROUTED AS: HR & OPERATIONS]\n\n${hrResult.response.text()}` 
-      });
+    // Phase 4: The HR Workflow (RAG via Pinecone)
+    if (routingData.intent === "HR/OPS") {
+      try {
+        // 1. Initialize BOTH Gemini Models
+        const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY!);
+        const embeddingModel = genAI.getGenerativeModel({ model: "gemini-embedding-2" });
+        // Initialize the text model to generate the final chat response
+        const textModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
+
+        // 2. Convert the user's question into a vector
+        const queryEmbedding = await embeddingModel.embedContent(prompt);
+        const queryVector = queryEmbedding.embedding.values;
+
+        // 3. Query Pinecone for the most relevant documents
+        const pc = new Pinecone({ apiKey: process.env.PINECONE_API_KEY! });
+        const pineconeIndex = pc.index(process.env.PINECONE_INDEX!);
+        
+        const queryResponse = await pineconeIndex.query({
+            vector: queryVector,
+            topK: 2, // Fetch the top 2 most relevant Confluence pages
+            includeMetadata: true
+        });
+
+        // 4. Extract the clean text from the Pinecone matches (fixing the TS match error)
+        const contextText = queryResponse.matches.map(match => {
+            const metadata = match.metadata as any; // Tell TypeScript this is safe
+            return metadata?.text || "";
+        }).join("\n\n---\n\n");
+
+        // 5. Synthesize the final answer using ONLY the retrieved context
+        const hrPrompt = `You are the Omni-Context-Agent HR Concierge. 
+        Answer the user's request based ONLY on the following official company documentation.
+        If the answer is not in the documentation, politely state that you cannot find it in the official HR docs.
+        
+        Official Company Docs:
+        ${contextText}
+        
+        User Request: ${prompt}`;
+
+        // Use the textModel to generate the final response
+        const result = await textModel.generateContent(hrPrompt);
+        const hrResponse = await result.response.text();
+        
+        return NextResponse.json({ success: true, message: hrResponse });
+      } catch (error) {
+        console.error("RAG Error:", error);
+        return NextResponse.json({ success: false, message: "Failed to query the HR Knowledge Base." });
+      }
     }
 
     // ---------------------------------------------------------------------------

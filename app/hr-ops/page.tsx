@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import ReactMarkdown from 'react-markdown';
 
 export default function HRDashboard() {
   const [prompt, setPrompt] = useState("");
@@ -73,13 +74,13 @@ export default function HRDashboard() {
         </div>
 
         {/* AI Terminal */}
-        <Card className="bg-slate-900/80 border-slate-700 shadow-2xl">
+        <Card className="bg-slate-900/80 border-slate-700 shadow-2xl backdrop-blur-md">
           <CardHeader>
             <CardTitle className="text-xl flex items-center gap-2">
               <span>🤝</span> Omni-Agent Concierge Terminal
             </CardTitle>
             <CardDescription className="text-slate-400">
-              Trigger automated workflows. (e.g., "Onboard John Doe as a Senior Developer.")
+              Generate onboarding information and coordinate workflows (e.g., "Give me developer onboarding info")
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -87,22 +88,32 @@ export default function HRDashboard() {
               <Input 
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder="Type your HR or Operations request here..." 
+                placeholder="What type of onboarding do you need help with?" 
                 className="bg-slate-950 border-slate-700 text-slate-200 focus-visible:ring-fuchsia-500 h-12"
               />
               <Button 
                 onClick={handleExecute}
                 disabled={loading}
-                className="bg-gradient-to-r from-fuchsia-500 to-rose-500 hover:from-fuchsia-400 hover:to-rose-400 text-white font-bold h-12 px-8"
+                className="bg-gradient-to-r from-fuchsia-500 to-rose-500 hover:from-fuchsia-400 hover:to-rose-400 text-white font-bold h-12 px-8 transition-all duration-300"
               >
                 {loading ? "Coordinating..." : "Execute"}
               </Button>
             </div>
             
-            {/* Terminal Output */}
-            <div className="bg-slate-950 rounded-lg p-4 font-mono text-sm min-h-[150px] border border-slate-800 whitespace-pre-wrap">
-              <span className="text-fuchsia-500">{"> "}</span>
-              <span className="text-slate-300">{response || "Awaiting input..."}</span>
+            {/* Beautifully Rendered Terminal Output */}
+            <div className="bg-slate-950 rounded-lg p-6 font-sans text-sm min-h-[150px] border border-slate-800 transition-all duration-300">
+              <div className="flex gap-2 items-start mb-2 font-mono">
+                <span className="text-fuchsia-500">{"> "}</span>
+                <span className="text-slate-400 text-xs">Omni-Agent Output:</span>
+              </div>
+              
+              {response ? (
+                <div className="prose prose-invert max-w-none prose-slate text-slate-300 leading-relaxed tracking-wide prose-headings:text-fuchsia-400 prose-strong:text-slate-100 prose-ul:list-disc prose-ul:pl-5">
+                  <ReactMarkdown>{response}</ReactMarkdown>
+                </div>
+              ) : (
+                <span className="text-slate-500 font-mono italic">Awaiting input...</span>
+              )}
             </div>
           </CardContent>
         </Card>
